@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>67WORDLE67</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <style>
+        :root {
+            --tile-border: #d3d6da;
+            --key-bg: #e8eff8;
+            --correct: #6aaa64;
+            --present: #c9b458;
+            --absent: #787c7e;
+            --kbd-absent: #3a3a3c;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            background: #ffffff;
+            overflow-x: hidden;
+            height: 100vh;
+        }
+
+        header {
+            font-size: 36px;
+            font-weight: bold;
+            margin: 15px 0;
+            border-bottom: 1px solid var(--tile-border);
+            width: 100%;
+            text-align: center;
+            padding-bottom: 10px;
+        }
+
+        /* --- АНИМАЦИИ МОДАЛЬНОГО ОКНА --- */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes zoomIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        @keyframes fadeOut {
+            from { opacity: 1; transform: scale(1); }
+            to { opacity: 0; transform: scale(0.9); }
+        }
+
+        #custom-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            display: none; 
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(2px);
+        }
+
+        #custom-modal.active {
+            display: flex;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        #custom-modal.active .modal-content {
+            animation: zoomIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        #custom-modal.closing {
+            animation: fadeIn 0.2s ease-in reverse forwards;
+        }
+
+        #custom-modal.closing .modal-content {
+            animation: fadeOut 0.2s ease-in forwards;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            max-width: 350px;
+            width: 90%;
+        }
+
+        input {
+            padding: 15px;
+            font-size: 18px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            width: 80%;
+            text-align: center;
+            outline: none;
+        }
+
+        .btn {
+            padding: 15px 25px;
+            background: #1a1a1b;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            border-radius: 8px;
+            width: 90%;
+            margin: 5px 0;
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        .btn:hover { background: #333; }
+        .btn:active { transform: scale(0.98); }
+
+        .game-wrapper {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            overflow-x: auto;
+            padding: 10px 0;
+        }
+
+        .game-container {
+            display: flex;
+            gap: 20px;
+            padding: 0 20px;
+        }
+
+        .player-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: opacity 0.3s;
+        }
+
+        .player-block.inactive { opacity: 0.4; }
+
+        .nickname-label {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #555;
+        }
+
+        .board {
+            display: grid;
+            grid-template-rows: repeat(6, 1fr);
+            gap: 5px;
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+        }
+
+        .tile {
+            width: 52px;
+            height: 52px;
+            border: 2px solid var(--tile-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            font-weight: bold;
+            text-transform: uppercase;
+            user-select: none;
+        }
+
+        .tile.pop { animation: pop 0.1s linear; border-color: #878a8c; }
+        .tile.flip { animation: flip 0.5s ease-in; }
+        @keyframes pop { 50% { transform: scale(1.1); } }
+        @keyframes flip { 50% { transform: rotateX(90deg); } }
+        
+        .correct { background: var(--correct); border-color: var(--correct); color: white; }
+        .present { background: var(--present); border-color: var(--present); color: white; }
+        .absent { background: var(--absent); border-color: var(--absent); color: white; }
+
+        .keyboard {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: auto;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 500px;
+            padding: 0 10px;
+        }
+        .kbd-row { display: flex; justify-content: center; gap: 6px; }
+        .key {
+            background: var(--key-bg);
+            border: none;
+            border-radius: 4px;
+            height: 58px;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+        .key.key-enter { flex: 1.5; font-size: 12px; }
+        .key.key-back { flex: 1.5; }
+        .key.correct { background: var(--correct); color: white; }
+        .key.present { background: var(--present); color: white; }
+        .key.absent { background: var(--kbd-absent); color: white; }
+        .keyboard.disabled { opacity: 0.5; pointer-events: none; }
+
+        #lobby-info { font-size: 14px; color: #777; margin-top: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="custom-modal">
+        <div class="modal-content" id="modal-inner"></div>
+    </div>
+
+    <header id="game-header">WORDLE</header>
+
+    <div class="game-wrapper">
+        <div class="game-container" id="game-main"></div>
+    </div>
+
+    <div class="keyboard disabled" id="main-keyboard">
+        <div class="kbd-row" id="row1"></div>
+        <div class="kbd-row" id="row2"></div>
+        <div class="kbd-row" id="row3"></div>
+        <div id="lobby-info" style="text-align: center;">ОЖИДАНИЕ ИГРОКОВ</div>
+    </div>
+
+<script>
+    const firebaseConfig = { databaseURL: "https://wordlie-e6e4d-default-rtdb.europe-west1.firebasedatabase.app/" };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let WORDS = ["АБЗАЦ","АБОНТ","АБОРТ","АБРИС","АВАНС","АВАТАР","АВГУСТ","АВИЗО","АВРАЛ","АВТОР","АГЕНТ","АГНЕЦ","АГОНИЯ","АГРЕХ","АДРЕС","АЗАРТ","АККОРД","АКТЕР","АКТИВ","АКУЛА","АЛМАЗ","АЛТАРЬ","АЛЬБОМ","АЛЬЯНС","АМБАР","АМБРА","АМИНЬ","АМПЕР","АМПИР","АНАНАС","АНГАР","АНГЕЛ","АНКЕТА","АНОНС","АПОГЕЙ","АПОРТ","АПРЕЛЬ","АПТЕКА","АРБУЗ","АРЕНА","АРЕСТ","АРГОН","АРКАН","АРМИЯ","АРХИВ","АРШИН","АСКЕТ","АСПИД","АСТРА","АТЛАС","АТЛЕТ","АТОЛЛ","АУДИТ","АФИША","АФЕРА","БАБКА","БАГЕТ","БАГОР","БАДЬЯ","БАЗАР","БАЗИС","БАЙКА","БАКАЛ","БАЛЕТ","БАЛКА","БАЛЛОН","БАНКА","БАРАК","БАРАН","БАРЖА","БАРИН","БАРИТ","БАРОН","БАРХАТ","БАСНЯ","БАТОН","БАЧОК","БАШНЯ","БЕДРО","БЕКАС","БЕЛОК","БЕРЕГ","БЕРЕТ","БЕРКУТ","БЕТОН","БИЛЕТ","БИНАР","БИРЖА","БИРКА","БИСЕР","БИТВА","БЛАГО","БЛЕСК","БЛИНЫ","БЛОХА","БЛУЗА","БЛЮДО","БОБЕР","БОКАЛ","БОКСЕР","БОМБА","БОНУС","БОРЕЦ","БОРИС","БОРОВ","БОРОДА","БОРЩИ","БОТИК","БОТВА","БОЧКА","БОЯРЕ","БРАВО","БРАКЕР","БРАНЬ","БРОВЬ","БРОМЫ","БРОНЬ","БРЮКИ","БУБЕН","БУБОН","БУДКА","БУДНИ","БУКВА","БУКЕТ","БУЛКА","БУЛАТ","БУМЕР","БУРАН","БУРКА","БУТОН","БУФЕР","БУХТА","БЫДЛО","БЫЛИН","БЫТИЕ","БЫЧОК","БЮДЖЕТ","БЮРОК","БЮСТЫ","ВАГОН","ВАЗА","ВАЗИС","ВАКСА","ВАЛЕТ","ВАЛИК","ВАЛУН","ВАЛЬС","ВАННА","ВАРАН","ВАРКА","ВАРЯГ","ВАТКА","ВАФЛЯ","ВАХТА","ВДОХ","ВЕЕР","ВЕЗДЕ","ВЕНИК","ВЕНОК","ВЕНЕЦ","ВЕПРЬ","ВЕРБА","ВЕРКА","ВЕРНО","ВЕРСИЯ","ВЕРСТА","ВЕРХИ","ВЕСЛО","ВЕСНА","ВЕТКА","ВЕТЕР","ВЕТОШЬ","ВЕЧЕР","ВЗВОД","ВЗГЛЯД","ВЗДОР","ВЗДОХ","ВЗЛЕТ","ВЗМАХ","ВЗНОС","ВЗОР","ВЗРЫВ","ВИДЕО","ВИЗИТ","ВИЗГИ","ВИЛКА","ВИЛЛА","ВИННЫЙ","ВИНТА","ВИНЕЦ","ВИРАЖ","ВИРУС","ВИСКИ","ВИСОК","ВИТОК","ВИХРЬ","ВИШНЯ","ВКЛАД","ВКУПЕ","ВКУС","ВЛАГА","ВЛАСТЬ","ВЛЕВО","ВЛИЯТЬ","ВНИЗУ","ВНОВЬ","ВНУКИ","ВНУТРЬ","ВНУЧКА","ВОВНЕ","ВОВСЕ","ВОДКА","ВОДОЙ","ВОЖАК","ВОЖДЬ","ВОЖЖИ","ВОЗДУХ","ВОЗНЯ","ВОЙНА","ВОКАЛ","ВОЛКИ","ВОЛНА","ВОЛОК","ВОЛОС","ВОЛЬТ","ВОПЛИ","ВОПРОС","ВОРОН","ВОРОТ","ВОРСА","ВОСЕМЬ","ВОСКА","ВОШЛА","ВПАДИНА","ВПЕРЕД","ВПИСАТЬ","ВПРАВО","ВПРОК","ВПУСК","ВРАГИ","ВРАКИ","ВРАТЬ","ВРЕД","ВРЕМЯ","ВРОДЕ","ВРОЗЬ","ВРУБ","ВСЕГО","ВСЕМИ","ВСПЫШКА","ВСТАТЬ","ВСУХУЮ","ВСЮДУ","ВСЯКО","ВТОРАЯ","ВТРОЕ","ВТУЛКА","ВХОД","ВЧЕРА","ВЪЕЗД","ВЫБОР","ВЫВИХ","ВЫВОД","ВЫВОЗ","ВЫГОДА","ВЫГОН","ВЫГУЛ","ВЫДАЧА","ВЫДОХ","ВЫЕЗД","ВЫЗОВ","ВЫКАТ","ВЫКУП","ВЫЛЕТ","ВЫЛОМ","ВЫНОС","ВЫПАД","ВЫПИСЬ","ВЫПУСК","ВЫРЕЗ","ВЫРОД","ВЫРОС","ВЫРЫТЬ","ВЫСОТА","ВЫТОК","ВЫХОД","ВЫШКА","ВЬЮГА","ВЬЮК","ВЯЗКА","ВЯЗЬ","ГАВАНЬ","ГАЗЕТА","ГАЗИК","ГАЗОК","Гайка","ГАЛКА","ГАЛОП","ГАЛЬКА","ГАМАК","ГАММА","ГАРАЖ","ГАРЕМ","ГАРНИР","ГВОЗДЬ","ГЕЙША","ГЕЛИЙ","ГЕРОЙ","ГЕТТО","ГИБКА","ГИБЕЛЬ","ГИЕНА","ГИМНЫ","ГИПС","ГИТАРА","ГЛАВА","ГЛАЗ","ГЛИНА","ГЛОБУС","ГЛОТКА","ГЛЫБА","ГЛЯНЦ","ГНЕВА","ГНЕЗДО","ГНЕТ","ГНИДА","ГОВОР","ГОДНЫЙ","ГОЛОД","ГОЛОС","ГОЛЬФ","ГОМОН","ГОНКА","ГОНЦА","ГОРБ","ГОРЕЦ","ГОРКА","ГОРЛО","ГОРОД","ГОРОХ","ГОРСТЬ","ГОСТЬ","ГОТИКА","ГОТОВ","ГРАДУС","ГРАММ","ГРАНИТ","ГРАНТ","ГРАФА","ГРАФИК","ГРАЦИЯ","ГРЕЗА","ГРЕЛКА","ГРЕНА","ГРЕХ","ГРИБЫ","ГРИВА","ГРИЛЬ","ГРИПП","ГРОБ","ГРОЗА","ГРОМ","ГРОТ","ГРУДА","ГРУДЬ","ГРУЗ","ГРУНТ","ГРУППА","ГРУША","ГРЫЖА","ГРЯДА","ГРЯЗЬ","ГУБКА","ГУДОК","ГУСАР","ГУСТО","ДАВАЙ","ДАВИТЬ","ДАВКА","ДАВНО","ДАМБА","ДАМКА","ДАРМА","ДАЧА","ДВЕРЬ","ДВИЖОК","ДВОР","ДЕБЕТ","ДЕБЮТ","ДЕВИЗ","ДЕВКА","ДЕГОТЬ","ДЕКАДА","ДЕКАН","ДЕКОР","ДЕЛИТЬ","ДЕЛЬТА","ДЕМОН","ДЕНЬГИ","ДЕПО","ДЕРБИ","ДЕРЕВО","ДЕРЖАВА","ДЕРЗОСТЬ","ДЕСАНТ","ДЕСЯТЬ","ДЕТАЛЬ","ДЕТКИ","ДЕШЕВО","ДЖАЗ","ДЖЕМ","ДЖИНЫ","ДЖИП","ДЗЮДО","ДИАЛОГ","ДИВАН","ДИЕТА","ДИЗЕЛЬ","ДИКИЙ","ДИЛЕР","ДИНАМО","ДИОД","ДИРИЖЕР","ДИСКИ","ДИСКО","ДИСКУС","ДИТЯ","ДИЧЬ","ДЛИНА","ДНИЩЕ","ДОБОР","ДОБРО","ДОБЫЧА","ДОВОД","ДОГМА","ДОЖДЬ","ДОЗОР","ДОКЛАД","ДОКУП","ДОЛГ","ДОЛЖЕН","ДОЛИНА","ДОЛЛАР","ДОЛОЙ","ДОЛЬКА","ДОЛЯ","ДОМА","ДОМИК","ДОМОВ","ДОМОЙ","ДОМРА","ДОНОР","ДОНОС","ДОПИСЬ","ДОПРОС","ДОПУСК","ДОРОГА","ДОСКА","ДОСУГ","ДОСЬЕ","ДОХОД","ДОЧКА","ДРАКА","ДРАМА","ДРАТЬ","ДРЕВО","ДРЕЙФ","ДРЕМА","ДРОВА","ДРОЖЬ","ДРОЗД","ДРУГ","ДРУЖБА","ДРЯНЬ","ДУБЛИ","ДУДА","ДУМА","ДУМКА","ДУПЛО","ДУРАК","ДУРНО","ДУТЬЕ","ДУХИ","ДУША","ДУШКА","ДУШНО","ДУШОК","ДУЭЛЬ","ДУЭТ","ДЫМКА","ДЫМНО","ДЫРА","ДЫРКА","ДЫХАНИЕ","ДЫШАТЬ","ДЬЯВОЛ","ДЮЖИНА","ДЮЙМ","ДЮНА","ДЯДЯ","ЕДОК","ЕЗДОК","ЕРУНДА","ЕРШИК","ЕСАУЛ","ЕХАТЬ","ЕХИДНА","ЖАБРА","ЖАДНО","ЖАЛКО","ЖАЛОБА","ЖАНР","ЖАРКИ","ЖАРКО","ЖАТВА","ЖВАЧКА","ЖГУТ","ЖДАТЬ","ЖЕВАТЬ","ЖЕЗЛ","ЖЕЛАНИЕ","ЖЕЛЕ","ЖЕЛОБ","ЖЕЛТЬ","ЖЕЛУДЬ","ЖЕНИХ","ЖЕРЛО","ЖЕРТВА","ЖЕСТ","ЖЕСТЬ","ЖЕТОН","ЖИВЕЦ","ЖИВОТ","ЖИВЬЕ","ЖИЗНЬ","ЖИЛА","ЖИЛКА","ЖИЛЬЕ","ЖИРАФ","ЖИРОК","ЖИТЬЕ","ЖОКЕЙ","ЖУЛИК","ЖУПЕЛ","ЖУРНАЛ","ЖУТКО","ЖУТЬ","ЖУЧОК","ЖЮРИ","ЗАБАВА","ЗАБЕГ","ЗАБОР","ЗАБОТА","ЗАБЫТЬ","ЗАВАЛ","ЗАВЕТ","ЗАВИСТЬ","ЗАВОД","ЗАВОЗ","ЗАВТРА","ЗАВУЧ","ЗАВЯЗКА","ЗАГАР","ЗАГИБ","ЗАГОН","ЗАГУЛ","ЗАДАЧА","ЗАДЕЛ","ЗАДОР","ЗАЖИМ","ЗАЖИТЬ","ЗАЙКА","ЗАЙМ","ЗАКАЗ","ЗАКАЛ","ЗАКАТ","ЗАКОН","ЗАКОП","ЗАКОС","ЗАЛИВ","ЗАЛОГ","ЗАЛОМ","ЗАМАЗКА","ЗАМЕР","ЗАМЕТКА","ЗАМОК","ЗАМОР","ЗАМУЖ","ЗАМША","ЗАНОС","ЗАПАД","ЗАПАС","ЗАПАХ","ЗАПЕРЕТЬ","ЗАПИЛ","ЗАПИСЬ","ЗАПИТЬ","ЗАПОР","ЗАПРУДА","ЗАПУСК","ЗАРАЗА","ЗАРОД","ЗАРУБКА","ЗАРЯД","ЗАСЕКА","ЗАСЛОН","ЗАСОР","ЗАСТОЙ","ЗАСУХА","ЗАТЕЯ","ЗАТОК","ЗАТОН","ЗАТОР","ЗАУТРА","ЗАХОД","ЗАЦЕП","ЗАЧЕМ","ЗАЧЕТ","ЗАЧИН","ЗАЩИТА","ЗАЯВКА","ЗАЯЦ","ЗВЕЗДА","ЗВЕНО","ЗВЕРЬ","ЗВОНОК","ЗВОН","ЗВУК","ЗДЕСЬ","ЗЕБРА","ЗЕВОК","ЗЕЛЕНЬ","ЗЕМЛЯ","ЗЕНИТ","ЗЕРНО","ЗЕФИР","ЗИГЗАГ","ЗИМА","ЗЛАК","ЗЛАТО","ЗЛОБА","ЗЛОДЕЙ","ЗМЕЯ","ЗНАК","ЗНАМЯ","ЗНАНИЕ","ЗНОЙ","ЗОДИАК","ЗОДЧИЙ","ЗОЛОТО","ЗОМБИ","ЗОНА","ЗОНТ","ЗОРКО","ЗРАЧОК","ЗРЕТЬ","ЗУБКИ","ЗУБНОЙ","ЗУБОК","ЗУБР","ЗЫБКО","ЗЯБКО","ИВРИТ","ИGOЛКА","ИГРОК","ИДЕАЛ","ИДЕЯ","ИДИОТ","ИДОЛ","ИЗБОЙ","ИЗБЫТЫ","ИЗВНЕ","ИЗВОЗ","ИЗГИБ","ИЗГОЙ","ИЗДАЛИ","ИЗДАТЬ","ИЗДАЧА","ИЗЛОМ","ИЗМЕНА","ИЗМЕР","ИЗНОС","ИЗНУТРИ","ИЗОЛЯ","ИЗРЕЗ","ИЗУВЕР","ИЗУЧИТЬ","ИЗХОД","ИЗЪЯТЬ","ИКОНА","ИКОТА","ИКРА","ИМИДЖ","ИМПОРТ","ИМПУЛЬС","ИНАЧЕ","ИНДЕКС","ИНДИЯ","ИНДУС","ИНЖЕНЕР","ИНКЕР","ИНТЕР","ИНТИМ","ИНФАРКТ","ИНФОРМ","ИОНИТ","ИРИС","ИРОНИЯ","ИСКАТЬ","ИСКРА","ИСКУС","ИСТОК","ИСТИНА","ИСХОД","ИТОГО","ИУДЕЙ","ИЮЛЬ","ИЮНЬ","КАБАК","КАБАН","КАБИНА","КАБЛУК","КАДЕТ","КАДРЫ","КАДЫК","КАЗАК","КАЗАН","КАЗНА","КАЗУС","КАЙМА","КАКАО","КАКТУС","КАЛАЧ","КАЛИЙ","КАЛИНА","КАЛИТКА","КАЛКА","КАЛЛЫ","КАЛЬКА","КАМЕНЬ","КАМЕРА","КАМИН","КАМНИ","КАНАЛ","КАНАТ","КАНВА","КАНОН","КАНУН","КАНЬОН","КАПЕЛЛА","КАПЕР","КАПИТАЛ","КАПЛЯ","КАПОТ","КАПРИЗ","КАПУСТА","КАРАБИН","КАРАТ","КАРАУЛ","КАРЕТА","КАРИЙ","КАРКАС","КАРМАН","КАРМА","КАРНИЗ","КАРОВ","КАРОЛЬ","КАРТА","КАРТОН","КАРТУЗ","КАРЬЕРА","КАСКА","КАССА","КАСТА","КАСТРЮЛЯ","КАТАЛ","КАТАР","КАТАТЬ","КАТЕР","КАТКА","КАТОД","КАТОК","КАТУШКА","КАФЕЛЬ","КАФТАН","КАЧАН","КАЧАТЬ","КАЧЕЛИ","КАШАЛОТ","КАШКА","КАШПО","КАШТАН","КАЮТА","КВАРК","КВАРТА","КВАС","КВОТА","КЕДР","КЕЙС","КЕКС","КЕЛЬТ","КЕЛЬЯ","КЕПКА","КЕРОСИН","КЕТЧУП","КЕФИР","КИБЕР","КИВОК","КИЗЯК","КИЛЕР","КИЛЬ","КИМОНО","КИНЗА","КИОСК","КИПЕТЬ","КИПКА","КИПУЧИЙ","КИРКА","КИРПИЧ","КИСЕЛЬ","КИСКА","КИСЛО","КИСТА","КИСТЬ","КИТАЙ","КИТЕЛЬ","КИШКА","КЛАВА","КЛАД","КЛАДЬ","КЛАН","КЛАСС","КЛЕВЕР","КЛЕЙ","КЛЕЙМО","КЛЕРК","КЛЕТКА","КЛЕТЬ","КЛЕШИ","КЛЕЩИ","КЛИЕНТ","КЛИЗМА","КЛИКА","КЛИМАТ","КЛИН","КЛИП","КЛИШЕ","КЛОАК","КЛОН","КЛОП","КЛОУН","КЛУБ","КЛУБОК","КЛУША","КЛЫК","КЛЮВ","КЛЮКВА","КЛЮЧ","КЛЯКСА","КЛЯП","КЛЯТВА","КЛЯЧА","КНИГА","КНУТ","КНЯЗЬ","КОБАЛЬТ","КОБРА","КОБУРА","КОВЕР","КОВКА","КОВШ","КОГДА","КОГТИ","КОДЕКС","КОДЕР","КОЖА","КОЖУХ","КОЗЕЛ","КОЗЛЫ","КОЙКА","КОЙОТ","КОКОН","КОКОС","КОКС","КОЛБА","КОЛЕНО","КОЛЕСО","КОЛЕЯ","КОЛИКИ","КОЛИТ","КОЛКА","КОЛОВ","КОЛОДА","КОЛОМ","КОЛОННА","КОЛОС","КОЛОТЬ","КОЛПАК","КОЛУН","КОЛХОЗ","КОЛЬТ","КОЛЬЦО","КОЛЬЯ","КОЛЯДА","КОЛЯСКА","КОМАНДА","КОМАР","КОМБИ","КОМЕДИЯ","КОМЕТА","КОМИК","КОМИН","КОММА","КОМОД","КОМПАС","КОМПОТ","КОНЕК","КОНЕц","КОНУС","КОНФЕТА","КОНЦА","КОНЦЕ","КОНЬКИ","КОПАТЬ","КОПЕЙКА","КОПЕР","КОПОТЬ","КОПТИ","КОПЬЕ","КОПЫТО","КОРАБЛЬ","КОРАЛЛ","КОРАН","КОРЖ","КОРЗИНА","КОРЕНЬ","КОРИЦА","КОРКА","КОРМА","КОрНИ","КОРОБ","КОРОВА","КОРОЛЬ","КОРОНА","КОРПУС","КОРСАЖ","КОРТИК","КОРУНД","КОРШУН","КОРЫТО","КОРЮШКА","КОРЯКА","КОСИТЬ","КОСМА","КОСМОС","КОСОЙ","КОСТИ","КОСТЬ","КОСУЛЯ","КОСУХА","КОСЯК","КОТЕЛ","КОТЛЫ","КОТОМКА","КОФЕ","КОФТА","КОЧАН","КОШКА","КОШМА","КОЩЕЙ","КРАБ","КРАЖА","КРАЙ","КРАН","КРАСКА","КРАХ","КРЕСТ","КРОВАТЬ","КРОВЬ","КРОЙ","КРОЛИК","КРОНА","КРОТ","КРУГ","КРУПА","КРУТИЗНА","КРЫЛО","КРЫША","КРЫСА","КРЮК","КУБОК","КУЗОВ","КУКЛА","КУЛАК","КУЛЬТ","КУМПОЛ","КУПЕ","КУПОЛ","КУПОН","КУРАЖ","КУРИЦА","КУРКА","КУРОК","КУРС","КУРТКА","КУРЬЕР","КУСАК","КУСОК","КУХНЯ","КУЧА","КУШЕТКА","ЛАБАЗ","ЛАВКА","ЛАВИНА","ЛАВРА","ЛАГЕРЬ","ЛАДЬЯ","ЛАЗЕР","ЛАЙКА","ЛАКЕЙ","ЛАМПА","ЛАМЬЕ","ЛАНЬ","ЛАПОТЬ","ЛАПША","ЛАРЕЦ","ЛАСКА","ЛАССО","ЛАТКИ","ЛАТУНЬ","ЛАФЕТ","ЛАХАН","ЛАШКА","ЛАЯТЬ","ЛЕБЕДЬ","ЛЕВЫЙ","ЛЕГИОН","ЛЕГКО","ЛЕГКОВ","ЛЕГОК","ЛЕГКИЕ","ЛЕДНИК","ЛЕЕР","ЛЕЙКА","ЛЕКАРЬ","ЛЕКЦИЯ","ЛЕПКА","ЛЕПТА","ЛЕСКА","ЛЕСНИК","ЛЕСНОЙ","ЛЕСТЬ","ЛЕТАТЬ","ЛЕТО","ЛЕТОК","ЛЕТУН","ЛЕШИЙ","ЛИАНА","ЛИВЕНЬ","ЛИДЕР","ЛИЗАТЬ","ЛИЗИН","ЛИЛИЯ","ЛИМАН","ЛИМИТ","ЛИМОН","ЛИНИЯ","ЛИНЗА","ЛИПКА","ЛИПКО","ЛИРА","ЛИСА","ЛИСТ","ЛИСТЬЯ","ЛИТЕР","ЛИТЬЕ","ЛИФТ","ЛИЦЕЙ","ЛИЦО","ЛИШНИЙ","ЛИШЬ","ЛОББИ","ЛОВЕЦ","ЛОВКО","ЛОВЛЯ","ЛОГИКА","ЛОДКА","ЛОДЫРЬ","ЛОЖКА","ЛОЖЬ","ЛОЗУНГ","ЛОКОН","ЛОКОТЬ","ЛОМКА","ЛОМОТЬ","ЛОПУХ","ЛОРД","ЛОСИНЫ","ЛОСОСЬ","ЛОТОК","ЛОТОС","ЛОТКА","ЛОХИ","ЛОШАДЬ","ЛОЩИНА","ЛОЯЛЬ","ЛУЖА","ЛУЖАЙКА","ЛУКА","ЛУКОШКО","ЛУНА","ЛУНКА","ЛУПА","ЛУТ","ЛУЧ","ЛУЧНИК","ЛЫЖИ","ЛЬГОТА","ЛЬДИНА","ЛЬЕ","ЛЮБОВЬ","ЛЮБОЙ","ЛЮДИ","ЛЮК","ЛЮМЕН","ЛЮСТРА","ЛЮТИК","ЛЯМКА","ЛЯП","МАФИЯ","МАГИЯ","МАКЕТ","МАНКА","МАРКА","МАСКА","МЕТРО","МИНУС","МИСКА","МОЛОТ","МОРОЗ","МОТОР","МУЗЫКА","МУСОР","МЫШКА","НАБОР","НАВЫК","НАЛОГ","НАПОР","НАРОД","НАРЯД","НАУКА","НЕФТЬ","НИТКА","НОМЕР","НОРМА","НОСОК","ОБЗОР","ОБЛАКО","ОБРАЗ","ОБРЫВ","ОКЕАН","ОПЕРА","ОПРОС","ОРДЕН","ОТДЕЛ","ОТЗЫВ","ПАЛАЧ","ПАЛЕЦ","ПАРОМ","ПАРУС","ПАУЗА","ПЕВЕЦ","ПЕНАЛ","ПЕРЕЦ","ПЕСОК","ПЕТЛЯ","ПЕТУХ","ПИЛОТ","ПИТОН","ПЛИТА","ПОВАР","ПОЕЗД","ПОЖАР","ПОИСК","ПОЛЕТ","ПОЛКА","ПОЛОСА","ПОМОЩЬ","ПОРОГ","ПОРОХ","ПОСОЛ","ПОТОК","ПОЧТА","ПРАВО","ПРЕСС","ПРИЮТ","PROЗА","ПУЛЬТ","ПЬЕСА","РАДИО","РАЗУМ","РАЙОН","РАЛЛИ","РАМКА","РАНЕЦ","РЕБРО","РЕЗАК","РЕЗИНА","РЕЛЬС","РЕЧКА","РОДИНА","РОЛИК","РОМАН","РУЧКА","РЫБАК","РЫНОК","РЫЧАГ","САЛАТ","САЛОН","САМКА","САПЕР","SARAЙ","САХАР","СВЕЧА","СЕВЕР","СЕМЬЯ","СЕТКА","СИЛАЧ","СКЛАД","СКЛОН","СКОТЧ","СКРИП","СЛАВА","СЛОВО","СЛУГА","СМЕНА","СМЕРТЬ","СМОЛА","СОБОР","СОВЕТ","СОКОЛ","СОЛОМА","СОСНА","СПОРТ","СПУСК","СТАДО","СТАЛЬ","СТЕНА","СТОЛБ","СТРАХ","СТРОЙ","СУДЬЯ","СУМКА","СУРОК","СФЕРА","СЦЕНА","ТАБЛО","ТАБУН","ТАКСИ","ТАЛОН","ТАРАН","ТЕАТР","ТЕКСТ","ТЕМНО","ТЕНОР","ТЕПЛО","ТЕРЕМ","ТЕСТО","ТИРАЖ","ТИСКИ","ТИТАН","ТИТУЛ","ТКАНЬ","ТОЛПА","ТОПОР","ТОЧКА","ТРАВА","ТРЕСК","ТРОПА","ТРУБА","ТУМАН","ТУФЛЯ","ТЫКВА","УБОРКА","УДАЧА","УКЛОН","УКСУС","УЛИЦА","УЛЫБКА","УМНИК","УСПЕХ","УСТАВ","УТЮГ","ФАКЕЛ","ФАКТЫ","ФЕРМА","ФИЛИН","ФИНИШ","ФИРМА","ФЛЕЙТА","ФЛОРА","ФОКУС","ФОЛЬГА","ФОРМА","ФОРУМ","ФОТОН","ФРАЗА","ФРУКТ","ХАЛАТ","ХВОСТ","ХИМИК","ХОККЕЙ","ХОЛОД","ХОМЯК","ХОРЕК","ХОХОТ","ХРАМ","ХРЕБЕТ","ЦАПЛЯ","ЦЕНТР","ЦЕПЬ","ЦИКЛ","ЦИФРА","ЧАЙКА","ЧЕРЕП","ЧЕРТА","ЧИСЛО","ЧУЛКИ","ШАЙБА","ШАПКА","ШАРИК","ШАССИ","ШАХТА","ШЕПОТ","ШИФР","ШКОЛА","ШКУРА","ШЛЯПА","ШМЕЛЬ","ШНУР","ШОРОХ","ШПИЛЬ","ШТОРМ","ШТОРЫ","ЩЕПКА","ЩЕТКА","ЭКРАН","ЭМАЛЬ","ЮНОША","ЮРИСТ","ЯБЛОКО","ЯГОДА","ЯКОРЬ","ЯРЛЫК","ЯХТА"];
+
+    let myNickname = "";
+    let lobbyId = null;
+    let myPlayerIndex = -1;
+    let targetWord = "";
+    let currentPlayerIndex = 0;
+    let gameState = [];
+    let isGameOver = false;
+    let keyStatus = {};
+    
+    // ПРЕДОТВРАЩАЕМ ДВОЙНОЕ НАЖАТИЕ
+    let isProcessing = false;
+
+    function showModal(type, msg = "") {
+        const modal = document.getElementById('custom-modal');
+        const inner = document.getElementById('modal-inner');
+        
+        modal.classList.remove('closing');
+        modal.style.display = 'flex';
+        modal.offsetHeight; 
+        modal.classList.add('active');
+
+        if (type === 'auth') {
+            inner.innerHTML = `
+                <h2>WORDLE</h2>
+                <input type="text" id="nick-input" placeholder="ВАШ НИК" maxlength="10">
+                <button class="btn" onclick="saveNickname()">ВОЙТИ</button>
+            `;
+        } else if (type === 'menu') {
+            inner.innerHTML = `
+                <h2>ПРИВЕТ, ${myNickname}!</h2>
+                <button class="btn" onclick="createGame()">СОЗДАТЬ ЛОББИ</button>
+                <div style="margin:10px">ИЛИ</div>
+                <input type="text" id="code-input" placeholder="КОД ЛОББИ" maxlength="4">
+                <button class="btn" onclick="joinByCode()">ПРИСОЕДИНИТЬСЯ</button>
+            `;
+        } else if (type === 'alert') {
+            inner.innerHTML = `
+                <h2>ВНИМАНИЕ</h2>
+                <p>${msg}</p>
+                <button class="btn" onclick="closeModal()">OK</button>
+            `;
+        } else if (type === 'gameover') {
+            inner.innerHTML = `
+                <h2>ИГРА ОКОНЧЕНА</h2>
+                <p>${msg}</p>
+                <button class="btn" onclick="location.reload()">В МЕНЮ</button>
+            `;
+        }
+    }
+
+    function closeModal(callback) {
+        const modal = document.getElementById('custom-modal');
+        modal.classList.remove('active');
+        modal.classList.add('closing');
+        
+        setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('closing');
+            if (callback) callback();
+        }, 200);
+    }
+
+    function saveNickname() {
+        const val = document.getElementById('nick-input').value.trim().toUpperCase();
+        if (val.length < 2) return;
+        myNickname = val;
+        showModal('menu');
+    }
+
+    function setupKeyboard() {
+        const rows = ["ЙЦУКЕНГШЩЗХЪ", "ФЫВАПРОЛДЖЭ", "ЯЧСМИТЬБЮ"];
+        rows.forEach((r, i) => {
+            const container = document.getElementById(`row${i+1}`);
+            container.innerHTML = '';
+            if(i === 2) createKey(container, "⌫", "key-back");
+            r.split('').forEach(char => createKey(container, char));
+            if(i === 2) createKey(container, "ВВОД", "key-enter");
+        });
+    }
+
+    function createKey(container, text, extraClass = "") {
+        const btn = document.createElement('button');
+        btn.className = `key ${extraClass}`;
+        btn.setAttribute('data-key', text);
+        if (text === "⌫") {
+            btn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM18 9l-6 6M12 9l6 6"/></svg>`;
+            btn.onclick = () => handleInput("BACK");
+        } else {
+            btn.textContent = text;
+            btn.onclick = () => handleInput(text === "ВВОД" ? "ENTER" : text);
+        }
+        container.appendChild(btn);
+    }
+
+    function updateKeyboard(letter, status) {
+        const keyBtn = document.querySelector(`.key[data-key="${letter}"]`);
+        if (!keyBtn || keyStatus[letter] === 'correct') return;
+        keyStatus[letter] = status;
+        keyBtn.className = `key ${status}`;
+    }
+
+    async function createGame() {
+        lobbyId = Math.floor(1000 + Math.random() * 9000);
+        targetWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+        myPlayerIndex = 0;
+        await db.ref('lobbies/' + lobbyId).set({
+            target: targetWord,
+            players: [myNickname, "", ""],
+            turn: 0,
+            status: "waiting"
+        });
+        startGameUI();
+    }
+
+    async function joinByCode() {
+        const code = document.getElementById('code-input').value.trim();
+        const snap = await db.ref('lobbies/' + code).once('value');
+        if (!snap.exists()) return showModal('alert', "Нет такого лобби!");
+        const data = snap.val();
+        let slot = data.players.indexOf("");
+        if (slot === -1) return showModal('alert', "Лобби уже заполнено!");
+
+        lobbyId = code;
+        myPlayerIndex = slot;
+        await db.ref(`lobbies/${lobbyId}/players/${slot}`).set(myNickname);
+        if (slot === 2) await db.ref(`lobbies/${lobbyId}/status`).set("playing");
+        startGameUI();
+    }
+
+    function startGameUI() {
+        closeModal(() => {
+            document.getElementById('game-header').textContent = `КОД: ${lobbyId}`;
+            const main = document.getElementById('game-main');
+            main.innerHTML = '';
+            for(let i=0; i<3; i++) {
+                gameState[i] = { row: 0, col: 0 };
+                const block = document.createElement('div');
+                block.className = 'player-block inactive';
+                block.id = `player-block-${i}`;
+                block.innerHTML = `<div class="nickname-label" id="label-${i}">...</div>
+                    <div class="board">${Array(6).fill('<div class="row">'+Array(5).fill('<div class="tile"></div>').join('')+'</div>').join('')}</div>`;
+                main.appendChild(block);
+            }
+            setupKeyboard();
+            listenToFirebase();
+        });
+    }
+
+    function listenToFirebase() {
+        db.ref('lobbies/' + lobbyId).on('value', (snap) => {
+            const data = snap.val();
+            if (!data) return;
+            currentPlayerIndex = data.turn;
+            targetWord = data.target;
+            
+            const isReady = !data.players.includes("");
+            const isMyTurn = isReady && currentPlayerIndex === myPlayerIndex && data.status === "playing";
+            document.getElementById('main-keyboard').classList.toggle('disabled', !isMyTurn);
+            document.getElementById('lobby-info').textContent = isReady ? (isMyTurn ? "ВАШ ХОД" : "ХОД СОПЕРНИКА") : "ЖДЕМ ИГРОКОВ...";
+
+            data.players.forEach((name, i) => {
+                const label = document.getElementById(`label-${i}`);
+                if (label) {
+                    label.textContent = name || "ОЖИДАНИЕ...";
+                    document.getElementById(`player-block-${i}`).classList.toggle('inactive', isReady && i !== currentPlayerIndex);
+                }
+            });
+
+            if (data.lastMove && data.lastMove.playerIndex !== myPlayerIndex) {
+                renderMove(data.lastMove);
+            }
+            if (data.status === "finished" && !isGameOver) {
+                isGameOver = true;
+                showModal('gameover', "СЛОВО БЫЛО: " + targetWord);
+            }
+        });
+    }
+
+    function handleInput(key) {
+        // Если уже обрабатываем нажатие - игнорируем всё
+        if (isProcessing) return;
+
+        let state = gameState[myPlayerIndex];
+        const playerBlock = document.getElementById(`player-block-${myPlayerIndex}`);
+        if(!playerBlock) return;
+        const rows = playerBlock.querySelectorAll('.row');
+        const tiles = rows[state.row].querySelectorAll('.tile');
+
+        if (key === "ENTER") {
+            if (state.col === 5) checkWord();
+        } else if (key === "BACK") {
+            if (state.col > 0) { 
+                state.col--; 
+                tiles[state.col].textContent = ""; 
+                tiles[state.col].classList.remove('pop'); 
+            }
+        } else if (state.col < 5) {
+            tiles[state.col].textContent = key;
+            tiles[state.col].classList.add('pop');
+            state.col++;
+        }
+    }
+
+    async function checkWord() {
+        // Блокируем ввод на время анимации и запроса
+        isProcessing = true;
+
+        let state = gameState[myPlayerIndex];
+        const rowElement = document.getElementById(`player-block-${myPlayerIndex}`).querySelectorAll('.row')[state.row];
+        const tiles = rowElement.querySelectorAll('.tile');
+        let guess = Array.from(tiles).map(t => t.textContent).join('');
+
+        let results = Array(5).fill('absent');
+        let tempTarget = targetWord.split('');
+
+        // 1. Проход на совпадения
+        tiles.forEach((t, i) => {
+            if (guess[i] === targetWord[i]) {
+                results[i] = 'correct';
+                tempTarget[i] = null;
+            }
+        });
+
+        // 2. Проход на наличие букв
+        tiles.forEach((t, i) => {
+            if (results[i] !== 'correct' && tempTarget.includes(guess[i])) {
+                results[i] = 'present';
+                tempTarget[tempTarget.indexOf(guess[i])] = null;
+            }
+        });
+
+        // 3. Анимация
+        tiles.forEach((t, i) => {
+            setTimeout(() => {
+                t.classList.add('flip');
+                setTimeout(() => {
+                    t.classList.add(results[i]);
+                    updateKeyboard(guess[i], results[i]);
+                }, 250);
+            }, i * 100);
+        });
+
+        const isWin = guess === targetWord;
+        
+        // 4. Обновление базы и снятие блокировки
+        setTimeout(async () => {
+            if (isWin) {
+                confetti();
+                await db.ref(`lobbies/${lobbyId}`).update({ status: "finished" });
+            } else {
+                const next = (myPlayerIndex + 1) % 3;
+                await db.ref(`lobbies/${lobbyId}`).update({
+                    turn: next,
+                    lastMove: { playerIndex: myPlayerIndex, guess, results, row: state.row }
+                });
+                state.row++; 
+                state.col = 0;
+            }
+            // РАЗБЛОКИРУЕМ ввод
+            isProcessing = false;
+        }, 1500);
+    }
+
+    function renderMove(move) {
+        if (gameState[move.playerIndex].row > move.row) return; 
+        const block = document.getElementById(`player-block-${move.playerIndex}`);
+        if(!block) return;
+        const tiles = block.querySelectorAll('.row')[move.row].querySelectorAll('.tile');
+        move.guess.split('').forEach((char, i) => {
+            tiles[i].textContent = char;
+            tiles[i].classList.add(move.results[i]);
+        });
+        gameState[move.playerIndex].row = move.row + 1;
+    }
+
+    // Инициализация
+    showModal('auth');
+
+    window.onkeydown = (e) => {
+        // Если ввод заблокирован флагом или стилем - ничего не делаем
+        if (isProcessing || document.getElementById('main-keyboard').classList.contains('disabled')) return;
+        
+        if (e.key === "Enter") handleInput("ENTER");
+        else if (e.key === "Backspace") handleInput("BACK");
+        else if (/^[а-яёА-ЯЁ]$/.test(e.key)) handleInput(e.key.toUpperCase());
+    };
+</script>
+</body>
+</html>

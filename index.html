@@ -29,14 +29,21 @@
             height: 100vh;
         }
 
+        /* --- СЕКРЕТНЫЙ РЕЖИМ --- */
+        body.secret-mode .tile {
+            color: transparent !important;
+            text-shadow: none !important;
+        }
+
         header {
             font-size: 36px;
             font-weight: bold;
-            margin: 15px 0;
+            margin: 15px 0 20px 0;
             border-bottom: 1px solid var(--tile-border);
             width: 100%;
             text-align: center;
             padding-bottom: 10px;
+            position: relative;
         }
 
         /* --- АНИМАЦИИ МОДАЛЬНОГО ОКНА --- */
@@ -93,7 +100,7 @@
             width: 90%;
         }
 
-        input {
+        input[type="text"] {
             padding: 15px;
             font-size: 18px;
             border: 1px solid #ccc;
@@ -126,7 +133,7 @@
             display: flex;
             justify-content: center;
             overflow-x: auto;
-            padding: 10px 0;
+            padding: 0 0 10px 0;
         }
 
         .game-container {
@@ -174,6 +181,7 @@
             font-weight: bold;
             text-transform: uppercase;
             user-select: none;
+            transition: color 0.2s;
         }
 
         .tile.pop { animation: pop 0.1s linear; border-color: #878a8c; }
@@ -226,7 +234,10 @@
         <div class="modal-content" id="modal-inner"></div>
     </div>
 
-    <header id="game-header">WORDLE</header>
+    <header>
+        <span id="game-header">WORDLE</span>
+        <button onclick="showModal('settings')" style="position:absolute; right:15px; top:15px; background:none; border:none; font-size:24px; cursor:pointer; padding:0;">⚙️</button>
+    </header>
 
     <div class="game-wrapper">
         <div class="game-container" id="game-main"></div>
@@ -254,11 +265,12 @@
     let gameState = [];
     let isGameOver = false;
     let keyStatus = {};
+    let globalGameData = null;
     
     // ПРЕДОТВРАЩАЕМ ДВОЙНОЕ НАЖАТИЕ
     let isProcessing = false;
 
-    function showModal(type, msg = "") {
+    function showModal(type, msg = "", callback = null) {
         const modal = document.getElementById('custom-modal');
         const inner = document.getElementById('modal-inner');
         
@@ -284,16 +296,39 @@
         } else if (type === 'alert') {
             inner.innerHTML = `
                 <h2>ВНИМАНИЕ</h2>
-                <p>${msg}</p>
-                <button class="btn" onclick="closeModal()">OK</button>
+                <div style="margin: 20px 0;">${msg}</div>
+                <button class="btn" id="alert-btn">OK</button>
             `;
+            setTimeout(() => {
+                document.getElementById('alert-btn').onclick = () => {
+                    if (callback) callback();
+                    else closeModal();
+                };
+            }, 0);
         } else if (type === 'gameover') {
             inner.innerHTML = `
                 <h2>ИГРА ОКОНЧЕНА</h2>
                 <p>${msg}</p>
                 <button class="btn" onclick="location.reload()">В МЕНЮ</button>
             `;
+        } else if (type === 'settings') {
+            const isSecret = document.body.classList.contains('secret-mode');
+            inner.innerHTML = `
+                <h2>НАСТРОЙКИ</h2>
+                <label style="display:flex; align-items:center; justify-content:center; gap:10px; font-size:18px; margin-bottom: 20px; cursor:pointer;">
+                    <input type="checkbox" id="secret-mode-toggle" ${isSecret ? 'checked' : ''} style="width:auto; margin:0; transform: scale(1.5);">
+                    Секретный режим
+                </label>
+                <button class="btn" onclick="applySettings()">ЗАКРЫТЬ</button>
+            `;
         }
+    }
+
+    function applySettings() {
+        const isSecret = document.getElementById('secret-mode-toggle').checked;
+        if (isSecret) document.body.classList.add('secret-mode');
+        else document.body.classList.remove('secret-mode');
+        closeModal();
     }
 
     function closeModal(callback) {
@@ -363,15 +398,19 @@
     async function joinByCode() {
         const code = document.getElementById('code-input').value.trim();
         const snap = await db.ref('lobbies/' + code).once('value');
-        if (!snap.exists()) return showModal('alert', "Нет такого лобби!");
+        if (!snap.exists()) return showModal('alert', "Нет такого лобби!", () => showModal('menu'));
         const data = snap.val();
         let slot = data.players.indexOf("");
-        if (slot === -1) return showModal('alert', "Лобби уже заполнено!");
+        if (slot === -1) return showModal('alert', "Лобби уже заполнено!", () => showModal('menu'));
 
         lobbyId = code;
         myPlayerIndex = slot;
         await db.ref(`lobbies/${lobbyId}/players/${slot}`).set(myNickname);
-        if (slot === 2) await db.ref(`lobbies/${lobbyId}/status`).set("playing");
+        if (slot === 2) {
+            await db.ref(`lobbies/${lobbyId}`).update({
+                status: "playing"
+            });
+        }
         startGameUI();
     }
 
@@ -398,6 +437,7 @@
         db.ref('lobbies/' + lobbyId).on('value', (snap) => {
             const data = snap.val();
             if (!data) return;
+            globalGameData = data;
             currentPlayerIndex = data.turn;
             targetWord = data.target;
             
@@ -425,7 +465,6 @@
     }
 
     function handleInput(key) {
-        // Если уже обрабатываем нажатие - игнорируем всё
         if (isProcessing) return;
 
         let state = gameState[myPlayerIndex];
@@ -450,13 +489,55 @@
     }
 
     async function checkWord() {
-        // Блокируем ввод на время анимации и запроса
         isProcessing = true;
 
         let state = gameState[myPlayerIndex];
         const rowElement = document.getElementById(`player-block-${myPlayerIndex}`).querySelectorAll('.row')[state.row];
         const tiles = rowElement.querySelectorAll('.tile');
         let guess = Array.from(tiles).map(t => t.textContent).join('');
+
+        // ------------------ ПАСХАЛКИ ------------------ //
+        
+        // 1. ПАСХАЛКА: ТРУСЫ
+        if (guess === "ТРУСЫ") {
+            showModal('alert', '<div style="font-size: 50px; font-weight: bold; letter-spacing: 5px;">6 67 7</div>');
+            
+            // Очищаем строку, чтобы игрок мог попробовать снова без траты хода
+            tiles.forEach(t => { 
+                t.textContent = ""; 
+                t.className = "tile"; 
+            });
+            state.col = 0;
+            isProcessing = false;
+            return;
+        }
+
+        // 2. СЕКРЕТНЫЙ ВИН: ДДНЕТ
+        if (guess === "ДДНЕТ") {
+            let winResults = Array(5).fill('correct');
+            
+            tiles.forEach((t, i) => {
+                setTimeout(() => {
+                    t.classList.add('flip');
+                    setTimeout(() => {
+                        t.classList.add('correct');
+                        updateKeyboard(guess[i], 'correct');
+                    }, 250);
+                }, i * 100);
+            });
+            
+            setTimeout(async () => {
+                confetti();
+                await db.ref(`lobbies/${lobbyId}`).update({ 
+                    lastMove: { playerIndex: myPlayerIndex, guess, results: winResults, row: state.row },
+                    status: "finished" 
+                });
+                isProcessing = false;
+            }, 1500);
+            return;
+        }
+        
+        // ---------------------------------------------- //
 
         let results = Array(5).fill('absent');
         let tempTarget = targetWord.split('');
@@ -504,7 +585,6 @@
                 state.row++; 
                 state.col = 0;
             }
-            // РАЗБЛОКИРУЕМ ввод
             isProcessing = false;
         }, 1500);
     }
@@ -514,10 +594,18 @@
         const block = document.getElementById(`player-block-${move.playerIndex}`);
         if(!block) return;
         const tiles = block.querySelectorAll('.row')[move.row].querySelectorAll('.tile');
+        
+        // Анимируем ход противника так же, как свой
         move.guess.split('').forEach((char, i) => {
-            tiles[i].textContent = char;
-            tiles[i].classList.add(move.results[i]);
+            setTimeout(() => {
+                tiles[i].textContent = char;
+                tiles[i].classList.add('flip');
+                setTimeout(() => {
+                    tiles[i].classList.add(move.results[i]);
+                }, 250);
+            }, i * 100);
         });
+        
         gameState[move.playerIndex].row = move.row + 1;
     }
 
@@ -525,7 +613,6 @@
     showModal('auth');
 
     window.onkeydown = (e) => {
-        // Если ввод заблокирован флагом или стилем - ничего не делаем
         if (isProcessing || document.getElementById('main-keyboard').classList.contains('disabled')) return;
         
         if (e.key === "Enter") handleInput("ENTER");
